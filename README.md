@@ -1,5 +1,7 @@
 # Lumen
 
+![Lumen demo](docs/demo.gif)
+
 A Philips Hue control portal built as an **identity-engineering study**: real
 Auth0 OIDC login for the human, and an LLM agent whose authority over the home is
 bounded by an explicit, enforced scope grant. The lighting is the demo surface;
