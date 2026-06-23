@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hue Control Portal</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 920px;
+         margin: 1.5rem auto; padding: 0 1.25rem; line-height: 1.5; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 1.3rem; font-weight: 600; margin: 0; }
+  .muted { color: #888; font-size: 0.85rem; }
+  a { color: inherit; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 12px; margin: 1rem 0; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card h3 { margin: 0 0 6px; font-size: 1rem; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+         margin-right: 6px; background: #bbb; }
+  .dot.on { background: #f2c14e; box-shadow: 0 0 8px #f2c14e; }
+  button { font: inherit; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+           border: 1px solid currentColor; background: transparent; }
+  button:hover { opacity: 0.8; }
+  input[type=range] { width: 100%; }
+  .chat { border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 1rem; }
+  .scopes { font-family: ui-monospace, monospace; font-size: 12px; color: #888; }
+  #log { min-height: 60px; max-height: 260px; overflow: auto; margin: 10px 0; }
+  .msg { margin: 6px 0; }
+  .me { text-align: right; }
+  .me span, .bot span { display: inline-block; padding: 6px 10px; border-radius: 10px;
+                        border: 1px solid var(--line); max-width: 85%; }
+  .me span { background: #8881; }
+  .deny span { border-color: #e24b4a; color: #e24b4a; }
+  .composer { display: flex; gap: 8px; }
+  .composer input { flex: 1; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
+                    background: transparent; color: inherit; font: inherit; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Hue Control Portal</h1>
+    <span class="muted">{{ user.name }} · <a href="/logout">log out</a></span>
+  </header>
+  <p class="scopes">agent scopes: {{ agent_scopes | join(" ") }}</p>
+
+  <div class="grid" id="rooms">
+    {% for rs in room_states %}
+    <div class="card" data-room="{{ rs.room.room_id }}">
+      <h3><span class="dot {{ 'on' if rs.is_on else '' }}"></span>{{ rs.room.name }}</h3>
+      <div class="row">
+        <button onclick="power('{{ rs.room.room_id }}', {{ 'false' if rs.is_on else 'true' }})">
+          {{ 'Turn off' if rs.is_on else 'Turn on' }}
+        </button>
+      </div>
+      <input type="range" min="0" max="100" value="{{ rs.brightness }}"
+             onchange="bright('{{ rs.room.room_id }}', this.value)">
+      <div class="muted">{{ rs.brightness }}%</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="chat">
+    <strong>Assistant</strong>
+    <div class="muted">Ask it to control the lights. It can only do what its scopes allow.</div>
+    <div id="log"></div>
+    <div class="composer">
+      <input id="box" placeholder="e.g. play the deep house scene in the studio"
+             onkeydown="if(event.key==='Enter') send()">
+      <button onclick="send()">Send</button>
+    </div>
+  </div>
+
+<script>
+const log = document.getElementById("log");
+
+function bubble(text, cls) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  const s = document.createElement("span");
+  s.textContent = text;
+  d.appendChild(s);
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function send() {
+  const box = document.getElementById("box");
+  const text = box.value.trim();
+  if (!text) return;
+  box.value = "";
+  bubble(text, "me");
+  const r = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify({ message: text }),
+  });
+  const data = await r.json();
+  const denied = (data.reply || "").includes("DENIED") || (data.reply || "").toLowerCase().includes("not authorized");
+  bubble(data.reply || "(no reply)", "bot" + (denied ? " deny" : ""));
+  if (data.rooms) refresh(data.rooms);
+}
+
+function refresh(rooms) {
+  for (const room of rooms) {
+    const card = document.querySelector('[data-room="' + room.room_id + '"]');
+    if (!card) continue;
+    card.querySelector(".dot").className = "dot " + (room.on ? "on" : "");
+    card.querySelector("input").value = room.brightness;
+    card.querySelector(".muted").textContent = room.brightness + "%";
+    const btn = card.querySelector("button");
+    btn.textContent = room.on ? "Turn off" : "Turn on";
+    btn.setAttribute("onclick", "power('" + room.room_id + "', " + (room.on ? "false" : "true") + ")");
+  }
+}
+
+async function reloadRooms() {
+  const r = await fetch("/api/rooms", { headers: { "Accept": "application/json" } });
+  if (r.ok) refresh((await r.json()).rooms);
+}
+
+async function power(id, on) {
+  await fetch("/api/rooms/" + id + "/power", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on }),
+  });
+  reloadRooms();
+}
+
+async function bright(id, level) {
+  await fetch("/api/rooms/" + id + "/brightness", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level: Number(level) }),
+  });
+  reloadRooms();
+}
+</script>
+</body>
+</html>
