@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page">Your space</h1>
+<p class="lede">Every room, lit by its own state. Tap a room to open its scenes.</p>
+
+<div class="grid">
+  {% for rs in room_states %}
+  <article class="card lit {{ '' if rs.on else 'off' }}"
+           data-room="{{ rs.id }}"
+           style="--on: {{ 1 if rs.on else 0 }}; --bri: {{ rs.brightness / 100 }};">
+    <div class="card-head">
+      <a class="rname" href="/rooms/{{ rs.id }}">{{ rs.name }}</a>
+      <button class="sw" aria-pressed="{{ 'true' if rs.on else 'false' }}"
+              aria-label="Toggle {{ rs.name }}" onclick="togglePower(this)">
+        <span class="knob"></span>
+      </button>
+    </div>
+
+    <div class="meter">
+      <span class="label">Brightness</span>
+      <span class="pct {{ '' if rs.on else 'off' }}">{{ rs.brightness }}%</span>
+    </div>
+    <input type="range" min="1" max="100" value="{{ rs.brightness }}"
+           oninput="onSlide(this)" onchange="commitBright(this)">
+
+    {% if rs.scenes %}
+    <div class="scenerow">
+      <select aria-label="Scene for {{ rs.name }}">
+        <option value="" disabled selected>Choose a scene…</option>
+        {% for s in rs.scenes %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+      <button class="btn solid" onclick="applyScene(this)">Apply</button>
+    </div>
+    {% else %}
+    <div class="label" style="margin-top:14px">No scenes in this room</div>
+    {% endif %}
+
+    <a class="open" href="/rooms/{{ rs.id }}">Open room &rarr;</a>
+  </article>
+  {% endfor %}
+</div>
+
+<section class="chat lit off">
+  <div class="chat-head">
+    <span class="label">Assistant</span>
+    <span class="label" style="color:var(--muted)">can: {{ agent_scopes | join(' · ') }}</span>
+  </div>
+  <div id="log" class="log"></div>
+  <div class="composer">
+    <input id="box" placeholder="dim the studio  /  switch bedroom to Candle  /  status"
+           onkeydown="if(event.key==='Enter') sendChat()">
+    <button class="btn solid" onclick="sendChat()">Send</button>
+  </div>
+</section>
+{% endblock %}
+
+{% block style %}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(264px,1fr)); gap:18px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:18px 18px 16px}
+  .card-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:16px}
+  .rname{font-family:var(--display); font-weight:600; font-size:19px; text-decoration:none}
+  .rname:hover{color:var(--amber)}
+  .meter{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:7px}
+  .scenerow{display:flex; gap:8px; margin-top:16px}
+  .scenerow select{flex:1}
+  .open{display:inline-block; margin-top:15px; font-size:13px; color:var(--muted); text-decoration:none}
+  .open:hover{color:var(--amber)}
+
+  .chat{margin:34px 0 50px; background:var(--surface); border:1px solid var(--line);
+        border-radius:var(--r); padding:18px}
+  .chat-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px}
+  .log{display:flex; flex-direction:column; gap:8px; min-height:20px; max-height:240px;
+       overflow:auto; margin-bottom:14px}
+  .msg{max-width:84%; padding:9px 13px; border-radius:12px; font-size:14px}
+  .msg.me{align-self:flex-end; background:var(--surface2)}
+  .msg.bot{align-self:flex-start; border:1px solid var(--line2)}
+  .msg.deny{border-color:var(--danger); color:var(--danger)}
+  .composer{display:flex; gap:9px}
+  .composer input{flex:1; font:inherit; font-size:14px; color:var(--text); background:var(--surface2);
+       border:1px solid var(--line2); border-radius:10px; padding:10px 12px}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function card(el){ return el.closest('.card'); }
+
+  async function togglePower(btn){
+    const c = card(btn), id = c.dataset.room;
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', on);
+    const bri = +c.querySelector('input[type=range]').value;
+    setGlow(c, on, bri);
+    c.querySelector('.pct').classList.toggle('off', !on);
+    try{ await api(`/api/rooms/${id}/power`, 'POST', {on}); }catch(e){ console.error(e); }
+  }
+
+  function onSlide(r){
+    const c = card(r), v = +r.value;
+    c.querySelector('.pct').textContent = v + '%';
+    if(c.querySelector('.sw').getAttribute('aria-pressed') === 'true') setGlow(c, true, v);
+  }
+  let t;
+  function commitBright(r){
+    const c = card(r), id = c.dataset.room, v = +r.value;
+    clearTimeout(t);
+    t = setTimeout(()=> api(`/api/rooms/${id}/brightness`, 'POST', {level:v}).catch(console.error), 120);
+  }
+
+  async function applyScene(btn){
+    const c = card(btn), id = c.dataset.room;
+    const sel = c.querySelector('select'); const sid = sel.value;
+    if(!sid) return;
+    try{
+      await api(`/api/rooms/${id}/scene`, 'POST', {scene_id: sid});
+      const rooms = (await api('/api/rooms','GET')).rooms;
+      const me = rooms.find(x=>x.room_id===id);
+      if(me){ setGlow(c, me.on, me.brightness);
+        c.querySelector('input[type=range]').value = me.brightness;
+        c.querySelector('.pct').textContent = me.brightness + '%';
+        c.querySelector('.sw').setAttribute('aria-pressed', me.on); }
+    }catch(e){ console.error(e); }
+  }
+
+  const log = document.getElementById('log');
+  function bubble(text, cls){
+    const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+    log.appendChild(d); log.scrollTop = log.scrollHeight;
+  }
+  async function sendChat(){
+    const box = document.getElementById('box'); const text = box.value.trim();
+    if(!text) return; box.value=''; bubble(text,'me');
+    try{
+      const data = await api('/api/chat','POST',{message:text});
+      const denied = (data.reply||'').includes('DENIED') || (data.reply||'').toLowerCase().includes('not authorized');
+      bubble(data.reply || '(no reply)', 'bot' + (denied ? ' deny':''));
+      if(data.rooms) for(const r of data.rooms){
+        const c = document.querySelector(`[data-room="${r.room_id}"]`);
+        if(!c) continue;
+        setGlow(c, r.on, r.brightness);
+        c.querySelector('input[type=range]').value = r.brightness;
+        c.querySelector('.pct').textContent = r.brightness + '%';
+        c.querySelector('.pct').classList.toggle('off', !r.on);
+        c.querySelector('.sw').setAttribute('aria-pressed', r.on);
+      }
+    }catch(e){ bubble('Something went wrong reaching the assistant.', 'bot deny'); }
+  }
+</script>
+{% endblock %}

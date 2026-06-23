@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Lumen{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d10; --bg2:#141419; --surface:#18181f; --surface2:#20202a;
+    --line:rgba(244,240,228,.09); --line2:rgba(244,240,228,.18);
+    --text:#ECEAE4; --muted:#8c8a83;
+    --amber:#F4B45A; --amber-deep:#E8932E; --cool:#5b7aa8; --danger:#e2685f;
+    --display:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'Space Mono',ui-monospace,monospace;
+    --r:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(244,180,90,.06), transparent 60%),
+      var(--bg);
+    color:var(--text); font-family:var(--body); line-height:1.5;
+    min-height:100vh; -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 22px}
+
+  header.top{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:22px 0 18px; border-bottom:1px solid var(--line); margin-bottom:30px;
+  }
+  .brand{display:flex; align-items:center; gap:11px}
+  .lamp{
+    width:13px; height:13px; border-radius:50%; background:var(--amber);
+    box-shadow:0 0 14px 2px rgba(244,180,90,.8); flex:none;
+  }
+  .brand b{font-family:var(--display); font-weight:600; font-size:19px; letter-spacing:.02em}
+  .brand .sub{font-family:var(--mono); font-size:11px; color:var(--muted); margin-left:2px}
+  .who{font-size:13px; color:var(--muted)}
+  .who a{color:var(--amber); text-decoration:none}
+  .who a:hover{text-decoration:underline}
+
+  h1.page{font-family:var(--display); font-weight:600; font-size:26px; margin:0 0 4px; letter-spacing:.01em}
+  .lede{color:var(--muted); font-size:14px; margin:0 0 26px}
+
+  .btn{
+    font:inherit; font-size:14px; padding:9px 15px; border-radius:10px; cursor:pointer;
+    border:1px solid var(--line2); background:transparent; color:var(--text);
+    transition:border-color .15s, background .15s;
+  }
+  .btn:hover{border-color:var(--amber); background:rgba(244,180,90,.07)}
+  .btn.solid{background:var(--amber); border-color:var(--amber); color:#1a1206; font-weight:500}
+  .btn.solid:hover{background:var(--amber-deep); border-color:var(--amber-deep)}
+
+  /* glow surface — the signature. --on (0/1) and --bri (0..1) drive the light. */
+  .lit{position:relative; overflow:hidden; isolation:isolate}
+  .lit::before{
+    content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
+    background:radial-gradient(120% 120% at 28% 0%, rgba(244,180,90,.55), rgba(232,147,46,.12) 45%, transparent 72%);
+    opacity:calc(var(--on,0) * (.18 + var(--bri,0) * .82));
+    transition:opacity .5s ease;
+  }
+  .lit.off::before{opacity:0}
+
+  /* toggle */
+  .sw{--w:46px; position:relative; width:var(--w); height:26px; flex:none;
+      border-radius:14px; border:1px solid var(--line2); background:var(--surface2); cursor:pointer;
+      transition:background .2s, border-color .2s}
+  .sw[aria-pressed="true"]{background:rgba(244,180,90,.22); border-color:var(--amber)}
+  .sw .knob{position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
+      background:var(--muted); transition:transform .2s, background .2s}
+  .sw[aria-pressed="true"] .knob{transform:translateX(20px); background:var(--amber);
+      box-shadow:0 0 10px rgba(244,180,90,.7)}
+
+  /* range */
+  input[type=range]{-webkit-appearance:none; appearance:none; width:100%; height:4px;
+      border-radius:3px; background:var(--surface2); outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:16px; height:16px;
+      border-radius:50%; background:var(--amber); cursor:pointer; box-shadow:0 0 8px rgba(244,180,90,.6)}
+  input[type=range]::-moz-range-thumb{width:16px; height:16px; border:none; border-radius:50%;
+      background:var(--amber); cursor:pointer}
+
+  select{font:inherit; font-size:14px; color:var(--text); background:var(--surface2);
+      border:1px solid var(--line2); border-radius:10px; padding:9px 11px; width:100%; cursor:pointer}
+  .pct{font-family:var(--mono); font-size:13px; color:var(--amber)}
+  .pct.off{color:var(--muted)}
+  .label{font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+  {% block style %}{% endblock %}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <span class="lamp"></span>
+        <b>Lumen</b><span class="sub">/ {{ room_count }} rooms</span>
+      </div>
+      <div class="who">{{ user_name }} · <a href="/logout">Log out</a></div>
+    </header>
+    {% block content %}{% endblock %}
+  </div>
+<script>
+  async function api(url, method, body){
+    const r = await fetch(url, {
+      method, headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if(!r.ok) throw new Error(await r.text());
+    return r.json().catch(()=>({}));
+  }
+  function setGlow(el, on, bri){
+    el.style.setProperty('--on', on ? 1 : 0);
+    el.style.setProperty('--bri', (bri ?? 0)/100);
+    el.classList.toggle('off', !on);
+  }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

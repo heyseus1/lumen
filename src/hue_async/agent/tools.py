@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 """
-The agent's tools. Each tool declares the scope it requires. The runner only
-exposes tools the agent is *granted*, and the dispatcher re-checks the scope at
-execution time — defense in depth, so the model can never exceed its grant even
-if it hallucinates a call.
+The agent's tools — this list IS the agent's capability boundary.
 
-Tool -> required scope:
-  list_rooms          lights:read
-  set_power           lights:write
-  set_brightness      lights:write
-  activate_scene      scenes:write
-  delete_scene        bridge:admin   (deliberately withheld by default)
+Approved capabilities only:
+  list_rooms      lights:read    metrics for all rooms (power + brightness)
+  room_status     lights:read    metrics for one room
+  list_scenes     lights:read    scenes available in a room (read-only)
+  set_power       lights:write   turn a room on/off
+  set_brightness  lights:write   set a room's brightness 1-100
+  activate_scene  scenes:write   recall an EXISTING scene
+
+There is deliberately no create/delete tool. Scene authoring stays in the Hue
+app; the agent can only recall what already exists. "Manage existing, never
+author" is enforced structurally — the model cannot call a tool that isn't here.
 """
 
 from dataclasses import dataclass
@@ -27,8 +29,11 @@ class Tool:
     handler: Callable[[Any, dict], dict]
 
 
+# --- resolvers ---------------------------------------------------------------
 def _find_room(service, name: str):
     name = (name or "").strip().lower()
+    if not name:
+        return None
     for room in service.list_rooms():
         if name in room.name.lower() or name == room.room_id.lower():
             return room
@@ -43,12 +48,29 @@ def _find_scene(service, room, name: str):
     return None
 
 
+# --- handlers ----------------------------------------------------------------
 def _list_rooms(service, args):
     out = []
     for room in service.list_rooms():
         is_on, bri = service.get_grouped_light_state(room.grouped_light_id)
         out.append({"room": room.name, "on": is_on, "brightness": round(bri)})
     return {"ok": True, "detail": out}
+
+
+def _room_status(service, args):
+    room = _find_room(service, args.get("room", ""))
+    if not room:
+        return {"ok": False, "detail": f"no room matching '{args.get('room')}'"}
+    is_on, bri = service.get_grouped_light_state(room.grouped_light_id)
+    return {"ok": True, "detail": {"room": room.name, "on": is_on, "brightness": round(bri)}}
+
+
+def _list_scenes(service, args):
+    room = _find_room(service, args.get("room", ""))
+    if not room:
+        return {"ok": False, "detail": f"no room matching '{args.get('room')}'"}
+    scenes = [s.name for s in service.list_scenes_for_room(room.room_id)]
+    return {"ok": True, "detail": {"room": room.name, "scenes": scenes}}
 
 
 def _set_power(service, args):
@@ -65,7 +87,7 @@ def _set_brightness(service, args):
     room = _find_room(service, args.get("room", ""))
     if not room:
         return {"ok": False, "detail": f"no room matching '{args.get('room')}'"}
-    level = max(0.0, min(100.0, float(args.get("level", 50))))
+    level = max(1.0, min(100.0, float(args.get("level", 50))))
     service.set_room_brightness(room.grouped_light_id, level)
     return {"ok": True, "detail": f"{room.name} set to {round(level)}%",
             "action": {"type": "brightness", "room": room.name, "level": level}}
@@ -77,18 +99,15 @@ def _activate_scene(service, args):
         return {"ok": False, "detail": f"no room matching '{args.get('room')}'"}
     scene = _find_scene(service, room, args.get("scene", ""))
     if not scene:
-        return {"ok": False, "detail": f"no scene matching '{args.get('scene')}' in {room.name}"}
+        avail = [s.name for s in service.list_scenes_for_room(room.room_id)]
+        return {"ok": False,
+                "detail": f"no scene matching '{args.get('scene')}' in {room.name}. available: {avail}"}
     service.activate_scene(scene.scene_id)
     return {"ok": True, "detail": f"activated '{scene.name}' in {room.name}",
             "action": {"type": "scene", "room": room.name, "scene": scene.name}}
 
 
-def _delete_scene(service, args):
-    # Real implementation would DELETE the scene resource. Left as a stub because
-    # it sits behind bridge:admin and is the "agent can't do this" demo.
-    return {"ok": True, "detail": f"deleted scene '{args.get('scene')}'"}
-
-
+# --- registry ----------------------------------------------------------------
 def all_tools() -> list[Tool]:
     return [
         Tool(
@@ -99,12 +118,34 @@ def all_tools() -> list[Tool]:
             handler=_list_rooms,
         ),
         Tool(
+            name="room_status",
+            description="Get the current power state and brightness of one room.",
+            input_schema={
+                "type": "object",
+                "properties": {"room": {"type": "string"}},
+                "required": ["room"],
+            },
+            required_scope="lights:read",
+            handler=_room_status,
+        ),
+        Tool(
+            name="list_scenes",
+            description="List the scenes available in a room (read-only).",
+            input_schema={
+                "type": "object",
+                "properties": {"room": {"type": "string"}},
+                "required": ["room"],
+            },
+            required_scope="lights:read",
+            handler=_list_scenes,
+        ),
+        Tool(
             name="set_power",
             description="Turn a room's lights on or off.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "room": {"type": "string", "description": "Room name, e.g. 'studio'"},
+                    "room": {"type": "string"},
                     "on": {"type": "boolean"},
                 },
                 "required": ["room", "on"],
@@ -114,12 +155,12 @@ def all_tools() -> list[Tool]:
         ),
         Tool(
             name="set_brightness",
-            description="Set a room's brightness to a percentage (0-100).",
+            description="Set a room's brightness to a percentage (1-100).",
             input_schema={
                 "type": "object",
                 "properties": {
                     "room": {"type": "string"},
-                    "level": {"type": "number", "description": "0 to 100"},
+                    "level": {"type": "number", "description": "1 to 100"},
                 },
                 "required": ["room", "level"],
             },
@@ -128,7 +169,7 @@ def all_tools() -> list[Tool]:
         ),
         Tool(
             name="activate_scene",
-            description="Activate a named scene in a room (e.g. 'Deep House').",
+            description="Activate an existing named scene in a room. Cannot create scenes.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -139,20 +180,6 @@ def all_tools() -> list[Tool]:
             },
             required_scope="scenes:write",
             handler=_activate_scene,
-        ),
-        Tool(
-            name="delete_scene",
-            description="Permanently delete a scene from the bridge.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "room": {"type": "string"},
-                    "scene": {"type": "string"},
-                },
-                "required": ["room", "scene"],
-            },
-            required_scope="bridge:admin",
-            handler=_delete_scene,
         ),
     ]
 
