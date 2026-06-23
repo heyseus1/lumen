@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ room.name }} · Lumen{% endblock %}
+{% block content %}
+<a class="back" href="/">&larr; All rooms</a>
+
+<section class="hero lit {{ '' if is_on else 'off' }}" id="hero"
+         data-room="{{ room.id }}"
+         style="--on: {{ 1 if is_on else 0 }}; --bri: {{ brightness / 100 }};">
+  <div class="hero-l">
+    <span class="label">Room</span>
+    <h1 class="page" style="font-size:34px; margin-top:4px">{{ room.name }}</h1>
+    <div class="state"><span id="statetext">{{ 'On' if is_on else 'Off' }}</span>
+      <span class="pct {{ '' if is_on else 'off' }}" id="heropct">{{ brightness }}%</span></div>
+  </div>
+  <button class="sw big" aria-pressed="{{ 'true' if is_on else 'false' }}"
+          aria-label="Toggle {{ room.name }}" onclick="heroPower(this)"><span class="knob"></span></button>
+</section>
+
+<div class="panel">
+  <span class="label">Brightness</span>
+  <input type="range" min="1" max="100" value="{{ brightness }}"
+         oninput="heroSlide(this)" onchange="heroCommit(this)" style="margin-top:12px">
+</div>
+
+<div class="panel">
+  <div class="panel-head"><span class="label">Scenes</span>
+    <span class="label" style="color:var(--muted)">{{ scenes | length }} available</span></div>
+  {% if scenes %}
+  <div class="tiles">
+    {% for s in scenes %}
+    <button class="tile" data-scene="{{ s.id }}" onclick="activate(this)">{{ s.name }}</button>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="lede" style="margin:8px 0 0">This room has no scenes yet. Create them in the Hue app and they'll appear here.</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block style %}
+  .back{display:inline-block; margin-bottom:18px; font-size:13px; color:var(--muted); text-decoration:none}
+  .back:hover{color:var(--amber)}
+  .hero{display:flex; align-items:center; justify-content:space-between;
+        background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+        padding:26px 26px; margin-bottom:18px}
+  .state{display:flex; align-items:baseline; gap:12px; margin-top:10px; font-family:var(--mono); font-size:14px}
+  .sw.big{--w:64px; height:34px; border-radius:18px}
+  .sw.big .knob{width:28px; height:28px}
+  .sw.big[aria-pressed="true"] .knob{transform:translateX(30px)}
+
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:var(--r);
+         padding:18px 20px; margin-bottom:16px}
+  .panel-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:16px}
+  .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:11px}
+  .tile{font:inherit; font-size:15px; font-family:var(--display); font-weight:500; text-align:left;
+        padding:16px 15px; border-radius:12px; cursor:pointer; color:var(--text);
+        background:var(--surface2); border:1px solid var(--line);
+        transition:border-color .15s, background .15s, transform .08s}
+  .tile:hover{border-color:var(--amber); background:rgba(244,180,90,.08)}
+  .tile:active{transform:scale(.98)}
+  .tile.active{border-color:var(--amber); box-shadow:0 0 0 1px var(--amber) inset}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const hero = document.getElementById('hero');
+  const id = hero.dataset.room;
+
+  async function heroPower(btn){
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', on);
+    const bri = +document.querySelector('input[type=range]').value;
+    setGlow(hero, on, bri);
+    document.getElementById('statetext').textContent = on ? 'On' : 'Off';
+    document.getElementById('heropct').classList.toggle('off', !on);
+    try{ await api(`/api/rooms/${id}/power`, 'POST', {on}); }catch(e){ console.error(e); }
+  }
+  function heroSlide(r){
+    const v = +r.value; document.getElementById('heropct').textContent = v + '%';
+    if(hero.querySelector('.sw').getAttribute('aria-pressed')==='true') setGlow(hero, true, v);
+  }
+  let t;
+  function heroCommit(r){
+    const v = +r.value; clearTimeout(t);
+    t = setTimeout(()=> api(`/api/rooms/${id}/brightness`,'POST',{level:v}).catch(console.error), 120);
+  }
+  async function activate(btn){
+    document.querySelectorAll('.tile').forEach(x=>x.classList.remove('active'));
+    btn.classList.add('active');
+    try{
+      await api(`/api/rooms/${id}/scene`, 'POST', {scene_id: btn.dataset.scene});
+      const rooms = (await api('/api/rooms','GET')).rooms;
+      const me = rooms.find(x=>x.room_id===id);
+      if(me){
+        setGlow(hero, me.on, me.brightness);
+        document.querySelector('input[type=range]').value = me.brightness;
+        document.getElementById('heropct').textContent = me.brightness + '%';
+        document.getElementById('statetext').textContent = me.on ? 'On' : 'Off';
+        hero.querySelector('.sw').setAttribute('aria-pressed', me.on);
+      }
+    }catch(e){ console.error(e); }
+  }
+</script>
+{% endblock %}

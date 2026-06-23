@@ -92,44 +92,76 @@ def _anthropic_run(message: str, service, granted: set[str], settings) -> dict:
 # Offline mock path (no API key needed)
 # ---------------------------------------------------------------------------
 def _mock_run(message: str, service, granted: set[str]) -> dict:
-    m = message.lower().strip()
+    """A name-aware intent parser. Instead of guessing English phrasings, it
+    matches the message against the bridge's actual room and scene names — so a
+    real scene name appearing anywhere in the sentence is treated as intent,
+    regardless of word order or verb. Replies are plain sentences."""
+    m = " " + message.lower().strip() + " "
     tools = {t.name: t for t in all_tools()}
     actions: list[dict] = []
 
-    def run(name: str, args: dict) -> str:
+    def run(name: str, args: dict) -> dict:
         out = _dispatch(tools[name], service, granted, args)
         if out.get("action"):
             actions.append(out["action"])
-        return str(out.get("detail"))
+        return out
 
-    # status / list
-    if any(w in m for w in ("status", "what's on", "list", "which lights")):
-        return {"reply": str(run("list_rooms", {})), "actions": actions}
+    def say(text: str) -> dict:
+        return {"reply": text, "actions": actions}
 
-    # scene: "activate <scene> in <room>" / "set the deep house scene"
-    sc = re.search(r"(?:activate|set|play|start)\s+(?:the\s+)?(.+?)\s+(?:scene|vibe)", m)
-    if sc:
-        room = re.search(r"in (?:the )?(\w+)", m)
-        reply = run("activate_scene", {"room": room.group(1) if room else "studio",
-                                        "scene": sc.group(1)})
-        return {"reply": reply, "actions": actions}
+    rooms = service.list_rooms()
+    room = next((r for r in rooms if r.name.lower() in m or r.room_id.lower() in m), None)
 
-    # brightness: "set studio to 40%" / "dim the kitchen to 20"
-    br = re.search(r"(?:set|dim|brighten)\s+(?:the\s+)?(\w+).*?(\d{1,3})\s*%?", m)
-    if br:
-        reply = run("set_brightness", {"room": br.group(1), "level": int(br.group(2))})
-        return {"reply": reply, "actions": actions}
+    has_num = re.search(r"(\d{1,3})", m)
+    is_question = message.strip().endswith("?") or bool(re.match(r"\s*(is|are|what|which|how|does|do)\b", m))
+    scene_word = "scene" in m
 
-    # power: "turn on/off the studio"
-    pw = re.search(r"turn\s+(on|off)\s+(?:the\s+)?(\w+)", m)
-    if pw:
-        reply = run("set_power", {"room": pw.group(2), "on": pw.group(1) == "on"})
-        return {"reply": reply, "actions": actions}
+    # 1) list scenes
+    if scene_word and any(w in m for w in ("list", "what", "which", "available", "show", "have", "got")):
+        if not room:
+            return say("Which room? e.g. 'list bedroom scenes'.")
+        out = run("list_scenes", {"room": room.name})
+        if not out["ok"]:
+            return say(out["detail"])
+        names = out["detail"]["scenes"]
+        if not names:
+            return say(f"{room.name} has no scenes.")
+        return say(f"{room.name} has {len(names)} scenes: {', '.join(names)}.")
 
-    # delete (withheld -> demonstrates refusal)
-    if "delete" in m and "scene" in m:
-        reply = run("delete_scene", {"room": "studio", "scene": "x"})
-        return {"reply": reply, "actions": actions}
+    # 2) brightness — a number, or a dim/brighten verb
+    dim = bool(re.search(r"\bdim\b", m))
+    brighten = bool(re.search(r"\bbrighten\b|\bbrighter\b", m))
+    if has_num or dim or brighten:
+        if not room:
+            return say("Which room? e.g. 'set bedroom to 40%'.")
+        level = int(has_num.group(1)) if has_num else (30 if dim else 100)
+        return say(run("set_brightness", {"room": room.name, "level": level})["detail"])
 
-    return {"reply": "Try: 'turn on the studio', 'set kitchen to 30%', "
-                     "'play the deep house scene', or 'status'.", "actions": actions}
+    # 3) activate an EXISTING scene — match a real scene name in the message
+    if not is_question:
+        for r in ([room] if room else rooms):
+            for s in service.list_scenes_for_room(r.room_id):
+                if s.name.lower() in m:
+                    return say(run("activate_scene", {"room": r.name, "scene": s.name})["detail"])
+        if scene_word and room:
+            avail = [s.name for s in service.list_scenes_for_room(room.room_id)]
+            return say(f"I couldn't find that scene in {room.name}. Available: {', '.join(avail)}.")
+
+    # 4) status / metrics
+    if is_question or any(w in m for w in ("status", "current", "what's on", "whats on")):
+        if room:
+            d = run("room_status", {"room": room.name})["detail"]
+            return say(f"The {d['room']} is " + (f"on at {d['brightness']}%." if d["on"] else "off."))
+        parts = [f"{x['room']} is " + (f"on at {x['brightness']}%" if x["on"] else "off")
+                 for x in run("list_rooms", {})["detail"]]
+        return say("; ".join(parts) + ".")
+
+    # 5) power on/off
+    if re.search(r"\b(on|off|turn|switch|toggle|shut|kill)\b", m):
+        if not room:
+            return say("Which room? e.g. 'turn off the bedroom'.")
+        on = "off" not in m and "shut" not in m and "kill" not in m
+        return say(run("set_power", {"room": room.name, "on": on})["detail"])
+
+    return say("Try: 'turn on the bedroom', 'set kitchen to 30%', "
+               "'list bedroom scenes', or 'switch bedroom to Candle'.")

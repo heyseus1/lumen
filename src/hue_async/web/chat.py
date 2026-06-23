@@ -53,6 +53,27 @@ async def api_brightness(room_id: str, request: Request, user: dict = Depends(ge
     return {"ok": True}
 
 
+@router.get("/api/rooms/{room_id}/scenes")
+def api_scenes(room_id: str, user: dict = Depends(get_current_user)):
+    service = get_room_service()
+    scenes = service.list_scenes_for_room(room_id)
+    return {"scenes": [{"id": s.scene_id, "name": s.name} for s in scenes]}
+
+
+@router.post("/api/rooms/{room_id}/scene")
+async def api_activate_scene(room_id: str, request: Request, user: dict = Depends(get_current_user)):
+    service = get_room_service()
+    room = next((r for r in service.list_rooms() if r.room_id == room_id), None)
+    if not room:
+        raise HTTPException(404, "room not found")
+    body = await request.json()
+    scene_id = body.get("scene_id")
+    if not scene_id:
+        raise HTTPException(400, "scene_id required")
+    service.activate_scene(scene_id)
+    return {"ok": True}
+
+
 @router.post("/api/chat")
 async def api_chat(request: Request, user: dict = Depends(get_current_user)):
     body = await request.json()
