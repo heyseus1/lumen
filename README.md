@@ -109,6 +109,8 @@ demonstrable on its own.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 cp .env.example .env        # MOCK_HUE / MOCK_LLM default to true
+# generate a real session secret and put it in .env as WEB_SESSION_SECRET
+openssl rand -hex 32
 uvicorn hue_async.web.app:app --reload --port 5000
 # open http://localhost:5000  -> redirected to Auth0 login
 ```
