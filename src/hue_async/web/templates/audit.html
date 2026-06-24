@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Audit · Lumen{% endblock %}
+{% block content %}
+<h1 class="page">Audit trail</h1>
+<p class="lede">Every privileged action — human or agent — and what the system allowed or refused. Live.</p>
+
+<div class="filters">
+  <button class="chip on" data-f="all" onclick="setFilter(this)">All</button>
+  <button class="chip" data-f="agent" onclick="setFilter(this)">Agent</button>
+  <button class="chip" data-f="human" onclick="setFilter(this)">Human</button>
+  <button class="chip" data-f="denied" onclick="setFilter(this)">Denied only</button>
+  <span class="label live"><span class="dot"></span>live</span>
+</div>
+
+<table class="log">
+  <thead><tr>
+    <th>Time</th><th>Principal</th><th>Action</th><th>Target</th><th>Decision</th><th>Reason / scope</th><th>cid</th>
+  </tr></thead>
+  <tbody id="rows"><tr><td colspan="7" class="empty">Waiting for activity… try a chat command or toggle a room.</td></tr></tbody>
+</table>
+{% endblock %}
+
+{% block style %}
+  .filters{display:flex; gap:8px; align-items:center; margin-bottom:16px}
+  .chip{font:inherit; font-size:13px; padding:6px 12px; border-radius:999px; cursor:pointer;
+        background:transparent; color:var(--muted); border:1px solid var(--line2)}
+  .chip.on{color:var(--text); border-color:var(--amber); background:rgba(244,180,90,.08)}
+  .live{margin-left:auto; display:flex; align-items:center; gap:6px}
+  .live .dot{width:7px; height:7px; border-radius:50%; background:#1d9e75; box-shadow:0 0 8px #1d9e75;
+             animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  table.log{width:100%; border-collapse:collapse; font-size:13px}
+  table.log th{text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.06em;
+     text-transform:uppercase; color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--line2)}
+  table.log td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  table.log tr.denied{background:rgba(226,104,95,.07)}
+  .empty{color:var(--muted); text-align:center; padding:26px 0!important}
+  .mono{font-family:var(--mono)}
+  .who-h{color:var(--cool)} .who-a{color:var(--amber)}
+  .dc{font-weight:600; font-family:var(--mono); font-size:12px}
+  .dc.allowed{color:#1d9e75} .dc.denied{color:var(--danger)} .dc.error{color:var(--amber-deep)}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let filter = 'all';
+  function setFilter(btn){
+    document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+    btn.classList.add('on'); filter = btn.dataset.f; render();
+  }
+  let entries = [];
+  function keep(e){
+    if(filter==='all') return true;
+    if(filter==='denied') return e.decision==='denied';
+    if(filter==='agent') return e.principal==='agent';
+    if(filter==='human') return e.principal.startsWith('human:');
+    return true;
+  }
+  function esc(s){ const d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
+  function principalCell(p){
+    if(p==='agent') return '<span class="who-a mono">agent</span>';
+    const sub = p.replace(/^human:/,'');
+    return '<span class="who-h mono">human</span> <span class="mono" style="color:var(--muted)">'+esc(sub.slice(0,18))+'</span>';
+  }
+  function render(){
+    const rows = document.getElementById('rows');
+    const list = entries.filter(keep);
+    if(!list.length){ rows.innerHTML = '<tr><td colspan="7" class="empty">No matching entries yet.</td></tr>'; return; }
+    rows.innerHTML = list.map(e=>{
+      const reason = e.decision==='denied' ? esc(e.reason) : esc(e.scope_basis||'');
+      return '<tr class="'+(e.decision==='denied'?'denied':'')+'">'
+        + '<td class="mono" style="color:var(--muted)">'+esc(e.ts.slice(11))+'</td>'
+        + '<td>'+principalCell(e.principal)+'</td>'
+        + '<td class="mono">'+esc(e.action)+'</td>'
+        + '<td>'+esc(e.target||'')+'</td>'
+        + '<td><span class="dc '+e.decision+'">'+e.decision+'</span></td>'
+        + '<td style="color:var(--muted)">'+reason+'</td>'
+        + '<td class="mono" style="color:var(--muted)">'+esc(e.cid||'')+'</td>'
+        + '</tr>';
+    }).join('');
+  }
+  async function poll(){
+    try{
+      const data = await api('/api/audit','GET');
+      entries = data.entries || [];
+      render();
+    }catch(e){ /* keep last view */ }
+  }
+  poll(); setInterval(poll, 2000);
+</script>
+{% endblock %}

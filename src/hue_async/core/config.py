@@ -22,7 +22,14 @@ class Settings(BaseSettings):
     # --- Agent ---
     ANTHROPIC_API_KEY: str = ""
     AGENT_MODEL: str = "claude-sonnet-4-6"
+    # Fallback grant, used only when no M2M credential is configured (offline/mock).
+    # When the M2M identity below is set, the live grant comes from the token.
     AGENT_SCOPES: str = "lights:read lights:write scenes:write"
+
+    # --- Agent non-human identity (Auth0 M2M) ---
+    AGENT_API_AUDIENCE: str = ""
+    AGENT_CLIENT_ID: str = ""
+    AGENT_CLIENT_SECRET: str = ""
 
     # --- Hue (only needed when MOCK_HUE is false) ---
     HUE_BRIDGE_IP: str = ""
