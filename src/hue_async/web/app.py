@@ -73,6 +73,19 @@ def index(request: Request, user: dict = Depends(get_current_user)):
     )
 
 
+@app.get("/audit", response_class=HTMLResponse)
+def audit_page(request: Request, user: dict = Depends(get_current_user)):
+    service = get_room_service()
+    return templates.TemplateResponse(
+        request,
+        "audit.html",
+        {
+            "user_name": user.get("name", "you"),
+            "room_count": len(service.list_rooms()),
+        },
+    )
+
+
 @app.get("/rooms/{room_id}", response_class=HTMLResponse)
 def room_detail(room_id: str, request: Request, user: dict = Depends(get_current_user)):
     service = get_room_service()

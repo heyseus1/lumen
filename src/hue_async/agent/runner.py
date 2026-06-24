@@ -15,8 +15,10 @@ logged-in human can do, and independent of what the prompt asks for. That is the
 """
 
 import re
+import uuid
 
 from hue_async.agent.tools import Tool, all_tools, granted_tools
+from hue_async.core.audit import record as audit
 
 SYSTEM = (
     "You are a home-lighting assistant that controls Philips Hue lights by "
@@ -26,22 +28,32 @@ SYSTEM = (
 )
 
 
-def _dispatch(tool: Tool, service, granted: set[str], args: dict) -> dict:
+def _dispatch(tool: Tool, service, granted: set[str], args: dict, cid: str | None = None) -> dict:
+    target = args.get("room") if isinstance(args, dict) else None
+    if tool is None:
+        audit("agent", "unknown_tool", "denied", target=target, reason="unknown tool", cid=cid)
+        return {"ok": False, "detail": "unknown tool"}
     if tool.required_scope not in granted:
+        audit("agent", tool.name, "denied", target=target,
+              reason=f"missing scope: {tool.required_scope}", cid=cid)
         return {"ok": False, "detail": f"DENIED: agent lacks scope '{tool.required_scope}'"}
-    return tool.handler(service, args)
+    out = tool.handler(service, args)
+    audit("agent", tool.name, "allowed" if out.get("ok") else "error",
+          target=target, scope_basis=tool.required_scope, cid=cid)
+    return out
 
 
-def run_agent(message: str, service, granted: set[str], settings) -> dict:
+def run_agent(message: str, service, granted: set[str], settings, cid: str | None = None) -> dict:
+    cid = cid or uuid.uuid4().hex[:6]
     if settings.MOCK_LLM or not settings.ANTHROPIC_API_KEY:
-        return _mock_run(message, service, granted)
-    return _anthropic_run(message, service, granted, settings)
+        return _mock_run(message, service, granted, cid)
+    return _anthropic_run(message, service, granted, settings, cid)
 
 
 # ---------------------------------------------------------------------------
 # Real LLM path (Anthropic tool use)
 # ---------------------------------------------------------------------------
-def _anthropic_run(message: str, service, granted: set[str], settings) -> dict:
+def _anthropic_run(message: str, service, granted: set[str], settings, cid: str | None = None) -> dict:
     import anthropic
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -73,8 +85,7 @@ def _anthropic_run(message: str, service, granted: set[str], settings) -> dict:
             if block.type != "tool_use":
                 continue
             tool = by_name.get(block.name) or next((t for t in all_tools() if t.name == block.name), None)
-            outcome = _dispatch(tool, service, granted, dict(block.input)) if tool else {
-                "ok": False, "detail": f"unknown tool {block.name}"}
+            outcome = _dispatch(tool, service, granted, dict(block.input), cid)
             if outcome.get("action"):
                 actions.append(outcome["action"])
             results.append({
@@ -91,7 +102,7 @@ def _anthropic_run(message: str, service, granted: set[str], settings) -> dict:
 # ---------------------------------------------------------------------------
 # Offline mock path (no API key needed)
 # ---------------------------------------------------------------------------
-def _mock_run(message: str, service, granted: set[str]) -> dict:
+def _mock_run(message: str, service, granted: set[str], cid: str | None = None) -> dict:
     """A name-aware intent parser. Instead of guessing English phrasings, it
     matches the message against the bridge's actual room and scene names — so a
     real scene name appearing anywhere in the sentence is treated as intent,
@@ -101,7 +112,7 @@ def _mock_run(message: str, service, granted: set[str]) -> dict:
     actions: list[dict] = []
 
     def run(name: str, args: dict) -> dict:
-        out = _dispatch(tools[name], service, granted, args)
+        out = _dispatch(tools[name], service, granted, args, cid)
         if out.get("action"):
             actions.append(out["action"])
         return out
